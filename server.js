@@ -1,37 +1,52 @@
+// server.js
 const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 8080;
 const wss = new WebSocket.Server({ port: PORT });
 
-let rooms = {}; // { roomId: [player1, player2] }
+console.log(`WebSocket server running on port ${PORT}`);
+
+// Store rooms and players
+let rooms = {};
 
 wss.on('connection', function connection(ws) {
-  ws.on('message', function incoming(message) {
-    let data = JSON.parse(message);
+  console.log('New player connected');
 
-    if (data.type === 'createRoom') {
-      let roomId = Math.random().toString(36).substr(2, 5);
-      rooms[roomId] = [ws];
-      ws.roomId = roomId;
-      ws.send(JSON.stringify({ type: 'roomCreated', roomId }));
+  ws.on('message', function incoming(message) {
+    let data;
+    try {
+      data = JSON.parse(message);
+    } catch (err) {
+      console.log('Invalid JSON:', message);
+      return;
     }
 
-    if (data.type === 'joinRoom') {
-      let room = rooms[data.roomId];
-      if (room && room.length === 1) {
-        room.push(ws);
+    // Handle creating/joining room
+    if (data.type === 'create') {
+      rooms[data.roomId] = rooms[data.roomId] || [];
+      rooms[data.roomId].push(ws);
+      ws.roomId = data.roomId;
+      ws.send(JSON.stringify({ type: 'joined', player: rooms[data.roomId].length }));
+    }
+
+    if (data.type === 'join') {
+      if (rooms[data.roomId] && rooms[data.roomId].length < 2) {
+        rooms[data.roomId].push(ws);
         ws.roomId = data.roomId;
-        room.forEach(p => p.send(JSON.stringify({ type: 'startGame' })));
+        ws.send(JSON.stringify({ type: 'joined', player: rooms[data.roomId].length }));
+        // Notify the other player
+        rooms[data.roomId].forEach(p => {
+          if (p !== ws) p.send(JSON.stringify({ type: 'ready' }));
+        });
       } else {
-        ws.send(JSON.stringify({ type: 'error', message: 'Room full or not found' }));
+        ws.send(JSON.stringify({ type: 'full' }));
       }
     }
 
-    if (data.type === 'gameUpdate') {
-      // send positions & actions to other player
-      let room = rooms[ws.roomId];
-      if (room) {
-        room.forEach(p => {
+    // Broadcast movements or bullets
+    if (data.type === 'update') {
+      if (ws.roomId && rooms[ws.roomId]) {
+        rooms[ws.roomId].forEach(p => {
           if (p !== ws) p.send(JSON.stringify(data));
         });
       }
@@ -39,12 +54,10 @@ wss.on('connection', function connection(ws) {
   });
 
   ws.on('close', function() {
-    let room = rooms[ws.roomId];
-    if (room) {
-      rooms[ws.roomId] = room.filter(p => p !== ws);
-      room.forEach(p => p.send(JSON.stringify({ type: 'playerDisconnected' })));
+    console.log('Player disconnected');
+    if (ws.roomId && rooms[ws.roomId]) {
+      rooms[ws.roomId] = rooms[ws.roomId].filter(p => p !== ws);
+      if (rooms[ws.roomId].length === 0) delete rooms[ws.roomId];
     }
   });
 });
-
-console.log(`WebSocket server running on port ${PORT}`);
